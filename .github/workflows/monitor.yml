@@ -1,0 +1,93 @@
+name: Monitor Website
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Install tools
+        run: sudo apt-get install -y curl jq
+
+      - name: Create data folder
+        run: mkdir -p data
+
+      - name: Random delay (0–30s)
+        run: sleep $((RANDOM % 30))
+
+      - name: Download page (Browser User-Agent)
+        run: |
+          curl -s \
+          -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+          "${{ secrets.TARGET_URL }}" \
+          -o data/current.html
+
+      - name: Extract links
+        id: extract
+        run: |
+          grep -oP '(?<=href=")[^"]*' data/current.html | sort > data/current_links.txt
+          if [ ! -f data/previous_links.txt ]; then
+            touch data/previous_links.txt
+          fi
+
+      - name: Check for new links
+        id: new_pages
+        run: |
+          NEW=$(comm -13 data/previous_links.txt data/current_links.txt)
+          if [ -n "$NEW" ]; then
+            echo "found=true" >> $GITHUB_OUTPUT
+            echo "list<<EOF" >> $GITHUB_OUTPUT
+            echo "$NEW" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check for changed content
+        id: changed_pages
+        run: |
+          if [ -f data/previous.html ]; then
+            if ! diff -q data/previous.html data/current.html > /dev/null; then
+              echo "found=true" >> $GITHUB_OUTPUT
+              echo "list=Main page content changed" >> $GITHUB_OUTPUT
+            else
+              echo "found=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Telegram notification
+        if: steps.new_pages.outputs.found == 'true' || steps.changed_pages.outputs.found == 'true'
+        run: |
+          MESSAGE="⚡ Website Update Detected
+
+New Links:
+${{ steps.new_pages.outputs.list }}
+
+Changes:
+${{ steps.changed_pages.outputs.list }}"
+
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+               -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+               -d text="$MESSAGE"
+
+      - name: Save current state
+        run: |
+          mv data/current_links.txt data/previous_links.txt
+          mv data/current.html data/previous.html
+
+      - name: Commit state
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          git add data/
+          git commit -m "Update stored state" || echo "No changes"
+          git push
