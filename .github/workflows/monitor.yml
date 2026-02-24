@@ -1,4 +1,4 @@
-name: Monitor Canva (Puppeteer)
+name: Monitor Canva (Click Navigation)
 
 on:
   workflow_dispatch:
@@ -23,7 +23,7 @@ jobs:
           npm init -y
           npm install puppeteer
 
-      - name: Run monitor (rendered pages)
+      - name: Run monitor (click menu)
         env:
           TARGET_URL: ${{ secrets.TARGET_URL }}
         run: |
@@ -69,10 +69,22 @@ jobs:
             return lines.slice(0, maxLines).join("\n") + `\n…(+${lines.length - maxLines} more)`;
           }
 
+          async function safeGoto(page, url, retries = 3) {
+            for (let i = 0; i < retries; i++) {
+              try {
+                await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
+                return;
+              } catch (e) {
+                if (i === retries - 1) throw e;
+                await sleep(1500);
+              }
+            }
+          }
+
           (async () => {
             const prev = loadJSON("data/state.json", { pages: {} });
 
-            // small jitter each run (0–30s)
+            // jitter 0–30s
             await sleep(Math.floor(Math.random() * 30000));
 
             const browser = await puppeteer.launch({
@@ -82,78 +94,148 @@ jobs:
             const page = await browser.newPage();
             await page.setUserAgent(UA);
 
-            async function safeGoto(url, retries = 3) {
-              for (let i = 0; i < retries; i++) {
-                try {
-                  await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
-                  return;
-                } catch (e) {
-                  if (i === retries - 1) throw e;
-                  await sleep(1500);
-                }
-              }
-            }
-
-            // 1) Load main page
-            await safeGoto(TARGET_URL);
-
             const origin = new URL(TARGET_URL).origin;
             const basePath = new URL(TARGET_URL).pathname.replace(/\/+$/, ""); // "/product-and-service-catalog-website"
             const basePrefix = origin + basePath;
 
-            // Grab hrefs from DOM
-            const hrefLinks = await page.$$eval("a", (as) => as.map((a) => a.href).filter(Boolean));
+            // 1) Open main page
+            await safeGoto(page, TARGET_URL);
 
-            // ALSO scan rendered HTML for subpage patterns under the same base path
-            const html = await page.content();
-            const escapedBase = basePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-            const re = new RegExp(escapedBase + "\\/[a-zA-Z0-9_-]+", "g");
-            const matches = html.match(re) || [];
-            const htmlLinks = matches.map((m) => origin + m);
+            // 2) Discover subpages by clicking nav links/buttons
+            // We click *internal links* that look like navigation items (visible, clickable).
+            // Strategy:
+            // - Collect all <a> elements and clickable elements inside common nav containers.
+            // - Click them one by one, record resulting URL if it changes to basePrefix + "/something"
+            // - Go back to main page between clicks to keep it stable.
 
-            // Combine, strip hash fragments, ignore assets, de-dupe
-            const internal = Array.from(
-              new Set(
-                [...hrefLinks, ...htmlLinks]
-                  .filter((u) => u.startsWith(origin))
-                  .filter((u) => !u.includes("/_assets/"))
-                  .map((u) => u.split("#")[0]) // drop #page-0 etc
-              )
-            ).filter(Boolean);
+            const discovered = new Set();
+            discovered.add(TARGET_URL);
 
-            // Always include main URL
-            if (!internal.includes(TARGET_URL)) internal.unshift(TARGET_URL);
+            async function collectClickableSelectors() {
+              // In Canva sites, nav/menu links are often <a> but sometimes wrapped.
+              // We'll collect XPaths for visible anchors and buttons with text.
+              const handles = await page.$$("a, button, [role='button']");
+              const clickables = [];
 
-            // Keep only URLs under the same "catalog base" path (or the main page itself)
-            const scoped = Array.from(
-              new Set(
-                internal.filter((u) => u === TARGET_URL || u.startsWith(basePrefix + "/"))
-              )
-            );
+              for (const h of handles) {
+                try {
+                  const box = await h.boundingBox();
+                  if (!box) continue;
 
-            // 2) Visit each page, grab visible text, hash it
-            const next = { pages: {} };
+                  const visible = await h.evaluate((el) => {
+                    const style = window.getComputedStyle(el);
+                    if (style.visibility === "hidden" || style.display === "none") return false;
+                    const rect = el.getBoundingClientRect();
+                    return rect.width > 5 && rect.height > 5;
+                  });
+                  if (!visible) continue;
 
-            for (const url of scoped) {
+                  const txt = await h.evaluate((el) => (el.innerText || "").trim());
+                  // skip empty / tiny
+                  if (!txt || txt.length < 2) continue;
+
+                  // build a stable selector using nth-of-type fallback
+                  const sel = await h.evaluate((el) => {
+                    function cssPath(e) {
+                      if (!(e instanceof Element)) return null;
+                      const path = [];
+                      while (e && e.nodeType === Node.ELEMENT_NODE) {
+                        let selector = e.nodeName.toLowerCase();
+                        if (e.id) {
+                          selector += "#" + e.id;
+                          path.unshift(selector);
+                          break;
+                        } else {
+                          let sib = e, nth = 1;
+                          while ((sib = sib.previousElementSibling)) {
+                            if (sib.nodeName.toLowerCase() === selector) nth++;
+                          }
+                          selector += `:nth-of-type(${nth})`;
+                        }
+                        path.unshift(selector);
+                        e = e.parentElement;
+                      }
+                      return path.join(" > ");
+                    }
+                    return cssPath(el);
+                  });
+
+                  if (sel) clickables.push({ sel, txt });
+                } catch {
+                  // ignore
+                }
+              }
+
+              // de-dupe selectors
+              const seen = new Set();
+              const uniq = [];
+              for (const c of clickables) {
+                if (seen.has(c.sel)) continue;
+                seen.add(c.sel);
+                uniq.push(c);
+              }
+              return uniq;
+            }
+
+            const clickables = await collectClickableSelectors();
+
+            // click a limited number to avoid going crazy; Canva menus usually small
+            const maxClicks = Math.min(clickables.length, 40);
+
+            for (let i = 0; i < maxClicks; i++) {
+              const { sel, txt } = clickables[i];
+
+              // return to main page each time
+              await safeGoto(page, TARGET_URL);
+
               try {
-                await safeGoto(url);
+                const el = await page.$(sel);
+                if (!el) continue;
 
+                // click and wait for URL to change or network idle
+                const before = page.url().split("#")[0];
+
+                await Promise.allSettled([
+                  page.waitForNavigation({ waitUntil: "networkidle2", timeout: 15000 }),
+                  el.click({ delay: 30 }),
+                ]);
+
+                const after = page.url().split("#")[0];
+
+                if (after !== before && after.startsWith(basePrefix + "/")) {
+                  discovered.add(after);
+                }
+              } catch {
+                // ignore click failures
+              }
+
+              await sleep(200);
+            }
+
+            // Save discovered URLs for debugging
+            writeFile("data/discovered_urls.txt", Array.from(discovered).sort().join("\n"));
+
+            // 3) Visit each discovered page and hash visible text
+            const next = { pages: {} };
+            const urls = Array.from(discovered).sort();
+
+            for (const url of urls) {
+              try {
+                await safeGoto(page, url);
                 const title = await page.title().catch(() => "");
                 const text = await page.evaluate(() => (document.body ? document.body.innerText : ""));
                 const cleaned = normText(text);
                 const hash = sha256(cleaned);
-
                 next.pages[url] = { title: title || "(no title)", hash };
-              } catch (e) {
+              } catch {
                 next.pages[url] = { title: "(load error)", hash: "ERROR" };
               }
-
               await sleep(250);
             }
 
             await browser.close();
 
-            // 3) Diff old vs new
+            // 4) Diff
             const prevPages = prev.pages || {};
             const nextPages = next.pages || {};
 
@@ -161,16 +243,13 @@ jobs:
             const changedUrls = [];
 
             for (const url of Object.keys(nextPages)) {
-              if (!prevPages[url]) {
-                newUrls.push(url);
-              } else if (prevPages[url].hash !== nextPages[url].hash) {
-                changedUrls.push(url);
-              }
+              if (!prevPages[url]) newUrls.push(url);
+              else if (prevPages[url].hash !== nextPages[url].hash) changedUrls.push(url);
             }
 
             const changed = newUrls.length > 0 || changedUrls.length > 0;
 
-            // 4) Write state + message
+            // 5) Write state + message
             writeFile("data/state.json", JSON.stringify(next, null, 2));
 
             if (changed) {
@@ -208,7 +287,7 @@ jobs:
               if (fs.existsSync("data/changed.flag")) fs.unlinkSync("data/changed.flag");
             }
 
-            console.log(`Checked ${Object.keys(nextPages).length} pages. Changed: ${changed}`);
+            console.log(`Discovered ${urls.length} pages. Changed: ${changed}`);
           })().catch((e) => {
             console.error(e);
             process.exit(1);
@@ -234,10 +313,9 @@ jobs:
             --data-urlencode text@"data/message.txt"
 
       - name: Commit updated state
-        if: ${{ steps.flag.outputs.changed == 'true' }}
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
-          git add data/state.json
+          git add data/state.json data/discovered_urls.txt
           git commit -m "Update monitor state" || echo "No changes"
           git push
