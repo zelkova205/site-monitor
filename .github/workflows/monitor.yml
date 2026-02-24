@@ -1,4 +1,4 @@
-name: Monitor Canva (Dynamic Navbar)
+name: Monitor Canva (Top Bar Click by Coordinates)
 
 on:
   workflow_dispatch:
@@ -35,192 +35,135 @@ jobs:
           const puppeteer = require("puppeteer");
 
           const TARGET_URL = process.env.TARGET_URL;
-
           const UA =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36";
 
-          function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
-          function normalize(t){ return (t || "").replace(/\s+/g, " ").trim(); }
-          function sha256(t){ return crypto.createHash("sha256").update(t, "utf8").digest("hex"); }
+          const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+          const normalize = (t) => (t || "").replace(/\s+/g, " ").trim();
+          const sha256 = (t) => crypto.createHash("sha256").update(t, "utf8").digest("hex");
 
-          function loadState(){
-            try { return JSON.parse(fs.readFileSync("data/state.json","utf8")); }
-            catch { return { pages:{} }; }
+          function loadState() {
+            try { return JSON.parse(fs.readFileSync("data/state.json", "utf8")); }
+            catch { return { pages: {} }; }
           }
-          function saveState(state){
+          function saveState(state) {
             fs.writeFileSync("data/state.json", JSON.stringify(state, null, 2));
           }
 
-          async function safeGoto(page, url, retries = 3){
-            for (let i=0; i<retries; i++){
-              try{
+          async function safeGoto(page, url, retries = 3) {
+            for (let i=0; i<retries; i++) {
+              try {
                 await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
                 return;
-              } catch(e){
+              } catch (e) {
                 if (i === retries - 1) throw e;
                 await sleep(1500);
               }
             }
           }
 
-          async function collectTopNavClickTargets(page){
-            // Returns a list of CSS selectors for clickable items near the top bar,
-            // plus their visible text for debugging.
-            return await page.evaluate(() => {
-              function visible(el){
-                const s = getComputedStyle(el);
-                if (s.display === "none" || s.visibility === "hidden") return false;
-                const r = el.getBoundingClientRect();
-                return r.width > 10 && r.height > 10;
-              }
-
-              function cssPath(el){
-                // generate a usable (not perfect) selector path
-                const parts = [];
-                let cur = el;
-                for (let i=0; i<6 && cur && cur.nodeType === 1; i++){
-                  let p = cur.tagName.toLowerCase();
-                  if (cur.id){
-                    p += "#" + CSS.escape(cur.id);
-                    parts.unshift(p);
-                    break;
-                  }
-                  const cls = (cur.className && cur.className.toString().trim()) ? cur.className.toString().trim().split(/\s+/).slice(0,2) : [];
-                  if (cls.length) p += "." + cls.map(c => CSS.escape(c)).join(".");
-                  // nth-of-type to reduce ambiguity
-                  let nth = 1;
-                  let sib = cur;
-                  while ((sib = sib.previousElementSibling)){
-                    if (sib.tagName === cur.tagName) nth++;
-                  }
-                  p += `:nth-of-type(${nth})`;
-                  parts.unshift(p);
-                  cur = cur.parentElement;
-                }
-                return parts.join(" > ");
-              }
-
-              function isClickable(el){
-                const tag = el.tagName.toLowerCase();
-                const role = el.getAttribute("role");
-                const s = getComputedStyle(el);
-                if (tag === "a" || tag === "button") return true;
-                if (role === "link" || role === "button") return true;
-                if (el.getAttribute("onclick")) return true;
-                if (s.cursor === "pointer") return true;
-                return false;
-              }
-
-              const all = Array.from(document.querySelectorAll("a,button,[role='link'],[role='button'],div,span"))
-                .filter(visible)
-                .map(el => ({ el, r: el.getBoundingClientRect() }))
-                // top bar region
-                .filter(x => x.r.top >= 0 && x.r.top < 160);
-
-              // Prefer elements that have meaningful text, and click their closest clickable ancestor
-              const items = [];
-              for (const x of all){
-                const txt = (x.el.innerText || "").trim();
-                if (!txt || txt.length < 2) continue;
-
-                // Walk up to find clickable ancestor
-                let cur = x.el;
-                let clickable = null;
-                for (let i=0; i<8 && cur; i++){
-                  if (cur instanceof Element && isClickable(cur)){
-                    clickable = cur;
-                    break;
-                  }
-                  cur = cur.parentElement;
-                }
-                if (!clickable) continue;
-
-                const sel = cssPath(clickable);
-                if (!sel) continue;
-
-                items.push({
-                  text: txt.replace(/\s+/g," ").trim(),
-                  selector: sel,
-                  left: Math.round(x.r.left),
-                  top: Math.round(x.r.top)
-                });
-              }
-
-              // Deduplicate by selector
-              const seen = new Set();
-              const uniq = [];
-              for (const it of items.sort((a,b)=> a.top-b.top || a.left-b.left)){
-                if (seen.has(it.selector)) continue;
-                seen.add(it.selector);
-                uniq.push(it);
-              }
-
-              return uniq.slice(0, 60);
-            });
+          async function waitForUrlChange(page, before, timeoutMs = 4000) {
+            const start = Date.now();
+            while (Date.now() - start < timeoutMs) {
+              const now = page.url().split("#")[0];
+              if (now !== before) return now;
+              await sleep(200);
+            }
+            return page.url().split("#")[0];
           }
 
           (async () => {
             const prev = loadState();
 
-            // jitter 0–20s (avoid being clockwork)
-            await sleep(Math.floor(Math.random() * 20000));
-
             const browser = await puppeteer.launch({
-              args: ["--no-sandbox","--disable-setuid-sandbox"]
+              args: ["--no-sandbox", "--disable-setuid-sandbox"],
             });
 
             const page = await browser.newPage();
             await page.setUserAgent(UA);
 
+            await safeGoto(page, TARGET_URL);
+
+            // Give Canva a moment to fully hydrate the UI
+            await sleep(1500);
+
             const origin = new URL(TARGET_URL).origin;
             const basePath = new URL(TARGET_URL).pathname.replace(/\/+$/, "");
             const basePrefix = origin + basePath;
 
-            await safeGoto(page, TARGET_URL);
+            // 1) Collect top-bar text "labels" with click coordinates (center points)
+            const labels = await page.evaluate(() => {
+              function visible(el) {
+                const s = getComputedStyle(el);
+                if (s.display === "none" || s.visibility === "hidden" || s.opacity === "0") return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 10 && r.height > 10;
+              }
 
-            // 1) Collect clickable targets in the top nav region
-            const targets = await collectTopNavClickTargets(page);
-            fs.writeFileSync("data/topnav_targets.json", JSON.stringify(targets, null, 2));
+              // grab elements with short text near the top (navbar region)
+              const els = Array.from(document.querySelectorAll("span, div, a, button"))
+                .filter(visible)
+                .map(el => {
+                  const r = el.getBoundingClientRect();
+                  const text = (el.innerText || "").replace(/\s+/g, " ").trim();
+                  return { text, r: { top: r.top, left: r.left, width: r.width, height: r.height } };
+                })
+                .filter(x => x.r.top >= 0 && x.r.top < 170)
+                .filter(x => x.text && x.text.length >= 2 && x.text.length <= 40)
+                .filter(x => !x.text.includes("\n"));
 
-            // 2) Click each target, capture resulting URL if it becomes a subpage
+              // de-dupe by text + approximate position (keep right-side items too)
+              const seen = new Set();
+              const out = [];
+              for (const x of els) {
+                const key = x.text.toLowerCase() + "|" + Math.round(x.r.left/10);
+                if (seen.has(key)) continue;
+                seen.add(key);
+                out.push({
+                  text: x.text,
+                  x: Math.round(x.r.left + x.r.width / 2),
+                  y: Math.round(x.r.top + x.r.height / 2),
+                  left: Math.round(x.r.left),
+                  top: Math.round(x.r.top)
+                });
+              }
+
+              // sort left->right
+              out.sort((a,b) => a.left - b.left);
+              return out.slice(0, 80);
+            });
+
+            fs.writeFileSync("data/topbar_labels.json", JSON.stringify(labels, null, 2));
+
+            // 2) Click each label by coordinates and record URL changes
             const discovered = new Set([TARGET_URL]);
 
-            for (const t of targets){
-              try{
-                await safeGoto(page, TARGET_URL);
+            for (const lab of labels) {
+              // reset to main page each time
+              await safeGoto(page, TARGET_URL);
+              await sleep(700);
 
-                const before = page.url().split("#")[0];
+              const before = page.url().split("#")[0];
 
-                // click
-                await page.click(t.selector, { delay: 30 }).catch(() => null);
+              // click at the center of the label
+              await page.mouse.click(lab.x, lab.y, { delay: 30 });
 
-                // wait briefly for route change / navigation
-                await Promise.race([
-                  page.waitForNavigation({ waitUntil: "networkidle2", timeout: 12000 }).catch(() => {}),
-                  sleep(1500)
-                ]);
+              const after = await waitForUrlChange(page, before, 3500);
 
-                const after = page.url().split("#")[0];
-
-                if (after !== before && after.startsWith(basePrefix + "/")){
-                  discovered.add(after);
-                }
-              } catch {
-                // ignore bad clicks
+              if (after.startsWith(basePrefix + "/")) {
+                discovered.add(after);
               }
-              await sleep(200);
             }
 
-            // Save discovered URLs for debugging
             fs.writeFileSync("data/discovered_urls.txt", Array.from(discovered).sort().join("\n"));
 
-            // 3) Hash each discovered page's visible text
+            // 3) Hash each discovered page’s visible text
             const next = { pages: {} };
 
-            for (const url of Array.from(discovered).sort()){
+            for (const url of Array.from(discovered).sort()) {
               await safeGoto(page, url);
-              const title = await page.title().catch(()=>"(no title)");
-              const text = await page.evaluate(()=>document.body ? document.body.innerText : "");
+              const title = await page.title().catch(() => "(no title)");
+              const text = await page.evaluate(() => document.body ? document.body.innerText : "");
               next.pages[url] = { title, hash: sha256(normalize(text)) };
               await sleep(250);
             }
@@ -231,7 +174,7 @@ jobs:
             const newUrls = [];
             const changedUrls = [];
 
-            for (const url of Object.keys(next.pages)){
+            for (const url of Object.keys(next.pages)) {
               if (!prev.pages[url]) newUrls.push(url);
               else if (prev.pages[url].hash !== next.pages[url].hash) changedUrls.push(url);
             }
@@ -240,31 +183,31 @@ jobs:
 
             saveState(next);
 
-            if (changed){
+            if (changed) {
               const lines = [];
               lines.push("⚡ Canva site updated");
               lines.push(`Main: ${TARGET_URL}`);
               lines.push("");
 
-              if (newUrls.length){
+              if (newUrls.length) {
                 lines.push(`New pages (${newUrls.length}):`);
                 newUrls.forEach(u => lines.push(`- ${u}`));
                 lines.push("");
               }
 
-              if (changedUrls.length){
+              if (changedUrls.length) {
                 lines.push(`Changed pages (${changedUrls.length}):`);
                 changedUrls.forEach(u => lines.push(`- ${u}`));
                 lines.push("");
               }
 
               fs.writeFileSync("data/message.txt", lines.join("\n"));
-              fs.writeFileSync("data/changed.flag","true");
+              fs.writeFileSync("data/changed.flag", "true");
             } else {
               if (fs.existsSync("data/changed.flag")) fs.unlinkSync("data/changed.flag");
             }
 
-            console.log(`Targets: ${targets.length} | Discovered: ${Object.keys(next.pages).length} | Changed: ${changed}`);
+            console.log(`Labels: ${labels.length} | Discovered: ${Object.keys(next.pages).length} | Changed: ${changed}`);
           })().catch(e => {
             console.error(e);
             process.exit(1);
@@ -293,6 +236,6 @@ jobs:
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
-          git add data/state.json data/discovered_urls.txt data/topnav_targets.json
+          git add data/state.json data/discovered_urls.txt data/topbar_labels.json
           git commit -m "Update monitor state" || echo "No changes"
           git push
