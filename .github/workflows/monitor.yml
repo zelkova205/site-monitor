@@ -14,7 +14,7 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Install tools
-        run: sudo apt-get install -y curl jq
+        run: sudo apt-get update && sudo apt-get install -y curl jq
 
       - name: Create data folder
         run: mkdir -p data
@@ -25,12 +25,11 @@ jobs:
       - name: Download page (Browser User-Agent)
         run: |
           curl -s \
-          -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-          "${{ secrets.TARGET_URL }}" \
-          -o data/current.html
+            -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            "${{ secrets.TARGET_URL }}" \
+            -o data/current.html
 
       - name: Extract links
-        id: extract
         run: |
           grep -oP '(?<=href=")[^"]*' data/current.html | sort > data/current_links.txt
           if [ ! -f data/previous_links.txt ]; then
@@ -38,9 +37,9 @@ jobs:
           fi
 
       - name: Check for new links
-        id: new_pages
+        id: new_links
         run: |
-          NEW=$(comm -13 data/previous_links.txt data/current_links.txt)
+          NEW=$(comm -13 data/previous_links.txt data/current_links.txt || true)
           if [ -n "$NEW" ]; then
             echo "found=true" >> $GITHUB_OUTPUT
             echo "list<<EOF" >> $GITHUB_OUTPUT
@@ -51,12 +50,12 @@ jobs:
           fi
 
       - name: Check for changed content
-        id: changed_pages
+        id: changed_content
         run: |
           if [ -f data/previous.html ]; then
             if ! diff -q data/previous.html data/current.html > /dev/null; then
               echo "found=true" >> $GITHUB_OUTPUT
-              echo "list=Main page content changed" >> $GITHUB_OUTPUT
+              echo "message=Main page content changed" >> $GITHUB_OUTPUT
             else
               echo "found=false" >> $GITHUB_OUTPUT
             fi
@@ -65,19 +64,22 @@ jobs:
           fi
 
       - name: Send Telegram notification
-        if: steps.new_pages.outputs.found == 'true' || steps.changed_pages.outputs.found == 'true'
+        if: steps.new_links.outputs.found == 'true' || steps.changed_content.outputs.found == 'true'
         run: |
+          NEW_LINKS="${{ steps.new_links.outputs.list }}"
+          CHANGE_MSG="${{ steps.changed_content.outputs.message }}"
+
           MESSAGE="⚡ Website Update Detected
 
 New Links:
-${{ steps.new_pages.outputs.list }}
+$NEW_LINKS
 
 Changes:
-${{ steps.changed_pages.outputs.list }}"
+$CHANGE_MSG"
 
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-               -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-               -d text="$MESSAGE"
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="$MESSAGE"
 
       - name: Save current state
         run: |
