@@ -22,7 +22,7 @@ jobs:
       - name: Random delay (0–30s)
         run: sleep $((RANDOM % 30))
 
-      - name: Download page (Browser User-Agent)
+      - name: Download page
         run: |
           curl -s \
             -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
@@ -36,46 +36,36 @@ jobs:
             touch data/previous_links.txt
           fi
 
-      - name: Check for new links
-        id: new_links
+      - name: Compare links
         run: |
           NEW=$(comm -13 data/previous_links.txt data/current_links.txt || true)
           if [ -n "$NEW" ]; then
-            echo "found=true" >> $GITHUB_OUTPUT
-            echo "list<<EOF" >> $GITHUB_OUTPUT
-            echo "$NEW" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+            echo "LINK_CHANGE=true" >> $GITHUB_ENV
+            echo "NEW_LINKS=$NEW" >> $GITHUB_ENV
           else
-            echo "found=false" >> $GITHUB_OUTPUT
+            echo "LINK_CHANGE=false" >> $GITHUB_ENV
+            echo "NEW_LINKS=None" >> $GITHUB_ENV
           fi
 
-      - name: Check for changed content
-        id: changed_content
+      - name: Compare page content
         run: |
           if [ -f data/previous.html ]; then
             if ! diff -q data/previous.html data/current.html > /dev/null; then
-              echo "found=true" >> $GITHUB_OUTPUT
-              echo "message=Main page content changed" >> $GITHUB_OUTPUT
+              echo "CONTENT_CHANGE=true" >> $GITHUB_ENV
             else
-              echo "found=false" >> $GITHUB_OUTPUT
+              echo "CONTENT_CHANGE=false" >> $GITHUB_ENV
             fi
           else
-            echo "found=false" >> $GITHUB_OUTPUT
+            echo "CONTENT_CHANGE=false" >> $GITHUB_ENV
           fi
 
       - name: Send Telegram notification
-        if: steps.new_links.outputs.found == 'true' || steps.changed_content.outputs.found == 'true'
+        if: env.LINK_CHANGE == 'true' || env.CONTENT_CHANGE == 'true'
         run: |
-          NEW_LINKS="${{ steps.new_links.outputs.list }}"
-          CHANGE_MSG="${{ steps.changed_content.outputs.message }}"
-
           MESSAGE="⚡ Website Update Detected
 
-New Links:
-$NEW_LINKS
-
-Changes:
-$CHANGE_MSG"
+New Links: $NEW_LINKS
+Content Changed: $CONTENT_CHANGE"
 
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
