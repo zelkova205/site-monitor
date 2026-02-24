@@ -72,7 +72,7 @@ jobs:
           (async () => {
             const prev = loadJSON("data/state.json", { pages: {} });
 
-            // small jitter each run (0–30s) to be less “clockwork”
+            // small jitter each run (0–30s)
             await sleep(Math.floor(Math.random() * 30000));
 
             const browser = await puppeteer.launch({
@@ -94,42 +94,60 @@ jobs:
               }
             }
 
-            // 1) Load main page and extract internal links
+            // 1) Load main page
             await safeGoto(TARGET_URL);
 
             const origin = new URL(TARGET_URL).origin;
-            const links = await page.$$eval("a", (as) => as.map((a) => a.href).filter(Boolean));
+            const basePath = new URL(TARGET_URL).pathname.replace(/\/+$/, ""); // "/product-and-service-catalog-website"
+            const basePrefix = origin + basePath;
+
+            // Grab hrefs from DOM
+            const hrefLinks = await page.$$eval("a", (as) => as.map((a) => a.href).filter(Boolean));
+
+            // ALSO scan rendered HTML for subpage patterns under the same base path
+            const html = await page.content();
+            const escapedBase = basePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            const re = new RegExp(escapedBase + "\\/[a-zA-Z0-9_-]+", "g");
+            const matches = html.match(re) || [];
+            const htmlLinks = matches.map((m) => origin + m);
+
+            // Combine, strip hash fragments, ignore assets, de-dupe
             const internal = Array.from(
               new Set(
-                links
+                [...hrefLinks, ...htmlLinks]
                   .filter((u) => u.startsWith(origin))
-                  // ignore obvious asset links
                   .filter((u) => !u.includes("/_assets/"))
+                  .map((u) => u.split("#")[0]) // drop #page-0 etc
+              )
+            ).filter(Boolean);
+
+            // Always include main URL
+            if (!internal.includes(TARGET_URL)) internal.unshift(TARGET_URL);
+
+            // Keep only URLs under the same "catalog base" path (or the main page itself)
+            const scoped = Array.from(
+              new Set(
+                internal.filter((u) => u === TARGET_URL || u.startsWith(basePrefix + "/"))
               )
             );
-
-            // Always include the main URL too
-            if (!internal.includes(TARGET_URL)) internal.unshift(TARGET_URL);
 
             // 2) Visit each page, grab visible text, hash it
             const next = { pages: {} };
 
-            for (const url of internal) {
+            for (const url of scoped) {
               try {
                 await safeGoto(url);
 
                 const title = await page.title().catch(() => "");
-                const text = await page.evaluate(() => document.body ? document.body.innerText : "");
+                const text = await page.evaluate(() => (document.body ? document.body.innerText : ""));
                 const cleaned = normText(text);
                 const hash = sha256(cleaned);
 
                 next.pages[url] = { title: title || "(no title)", hash };
               } catch (e) {
-                // If a page fails to load, keep a marker hash so errors can be noticed
                 next.pages[url] = { title: "(load error)", hash: "ERROR" };
               }
 
-              // tiny pacing
               await sleep(250);
             }
 
@@ -186,7 +204,6 @@ jobs:
               writeFile("data/message.txt", msg);
               writeFile("data/changed.flag", "true");
             } else {
-              // clean up if no change
               if (fs.existsSync("data/message.txt")) fs.unlinkSync("data/message.txt");
               if (fs.existsSync("data/changed.flag")) fs.unlinkSync("data/changed.flag");
             }
