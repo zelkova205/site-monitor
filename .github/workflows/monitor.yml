@@ -30,7 +30,6 @@ jobs:
             -o data/current.html
 
       - name: Extract links
-        id: extract
         run: |
           grep -oP '(?<=href=")[^"]*' data/current.html | sort > data/current_links.txt
           if [ ! -f data/previous_links.txt ]; then
@@ -41,9 +40,12 @@ jobs:
         id: new_pages
         run: |
           NEW=$(comm -13 data/previous_links.txt data/current_links.txt || true)
+
           if [ -n "$NEW" ]; then
             echo "found=true" >> $GITHUB_OUTPUT
-            echo "list=$NEW" >> $GITHUB_OUTPUT
+            echo "list<<EOF" >> $GITHUB_OUTPUT
+            echo "$NEW" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           else
             echo "found=false" >> $GITHUB_OUTPUT
             echo "list=None" >> $GITHUB_OUTPUT
@@ -55,23 +57,29 @@ jobs:
           if [ -f data/previous.html ]; then
             if ! diff -q data/previous.html data/current.html > /dev/null; then
               echo "found=true" >> $GITHUB_OUTPUT
-              echo "list=Main page content changed" >> $GITHUB_OUTPUT
+              echo "message=Main page content changed" >> $GITHUB_OUTPUT
             else
               echo "found=false" >> $GITHUB_OUTPUT
-              echo "list=None" >> $GITHUB_OUTPUT
+              echo "message=None" >> $GITHUB_OUTPUT
             fi
           else
             echo "found=false" >> $GITHUB_OUTPUT
-            echo "list=None" >> $GITHUB_OUTPUT
+            echo "message=None" >> $GITHUB_OUTPUT
           fi
 
       - name: Send Telegram notification
         if: ${{ steps.new_pages.outputs.found == 'true' || steps.changed_pages.outputs.found == 'true' }}
         run: |
           NEW_LINKS="${{ steps.new_pages.outputs.list }}"
-          CHANGES="${{ steps.changed_pages.outputs.list }}"
+          CHANGES="${{ steps.changed_pages.outputs.message }}"
 
-          MESSAGE="⚡ Website Update Detected - New Links: $NEW_LINKS - Changes: $CHANGES"
+          MESSAGE="⚡ Website Update Detected
+
+New Links:
+$NEW_LINKS
+
+Changes:
+$CHANGES"
 
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
