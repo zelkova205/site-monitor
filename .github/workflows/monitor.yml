@@ -1,4 +1,4 @@
-name: Monitor Website
+name: Monitor Canva (Puppeteer)
 
 on:
   workflow_dispatch:
@@ -13,50 +13,214 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Install curl
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y curl
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-      - name: Create data folder
+      - name: Install Puppeteer
+        run: |
+          npm init -y
+          npm install puppeteer
+
+      - name: Run monitor (rendered pages)
+        env:
+          TARGET_URL: ${{ secrets.TARGET_URL }}
         run: |
           mkdir -p data
 
-      - name: Download page
-        run: |
-          curl -s "${{ secrets.TARGET_URL }}" -o data/current.html
+          cat > monitor.cjs <<'EOF'
+          const fs = require("fs");
+          const crypto = require("crypto");
+          const puppeteer = require("puppeteer");
 
-      - name: Create baseline if missing
-        run: |
-          if [ ! -f data/previous.html ]; then
-            cp data/current.html data/previous.html
-          fi
+          const TARGET_URL = process.env.TARGET_URL;
 
-      - name: Compare pages
-        id: compare
+          const UA =
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+          function sleep(ms) {
+            return new Promise((r) => setTimeout(r, ms));
+          }
+
+          function normText(s) {
+            return (s || "").replace(/\s+/g, " ").trim();
+          }
+
+          function sha256(s) {
+            return crypto.createHash("sha256").update(s, "utf8").digest("hex");
+          }
+
+          function loadJSON(path, fallback) {
+            try {
+              return JSON.parse(fs.readFileSync(path, "utf8"));
+            } catch {
+              return fallback;
+            }
+          }
+
+          function writeFile(path, content) {
+            fs.writeFileSync(path, content, "utf8");
+          }
+
+          function limitLines(text, maxLines) {
+            const lines = text.split("\n");
+            if (lines.length <= maxLines) return text;
+            return lines.slice(0, maxLines).join("\n") + `\n…(+${lines.length - maxLines} more)`;
+          }
+
+          (async () => {
+            const prev = loadJSON("data/state.json", { pages: {} });
+
+            // small jitter each run (0–30s) to be less “clockwork”
+            await sleep(Math.floor(Math.random() * 30000));
+
+            const browser = await puppeteer.launch({
+              args: ["--no-sandbox", "--disable-setuid-sandbox"],
+            });
+
+            const page = await browser.newPage();
+            await page.setUserAgent(UA);
+
+            async function safeGoto(url, retries = 3) {
+              for (let i = 0; i < retries; i++) {
+                try {
+                  await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
+                  return;
+                } catch (e) {
+                  if (i === retries - 1) throw e;
+                  await sleep(1500);
+                }
+              }
+            }
+
+            // 1) Load main page and extract internal links
+            await safeGoto(TARGET_URL);
+
+            const origin = new URL(TARGET_URL).origin;
+            const links = await page.$$eval("a", (as) => as.map((a) => a.href).filter(Boolean));
+            const internal = Array.from(
+              new Set(
+                links
+                  .filter((u) => u.startsWith(origin))
+                  // ignore obvious asset links
+                  .filter((u) => !u.includes("/_assets/"))
+              )
+            );
+
+            // Always include the main URL too
+            if (!internal.includes(TARGET_URL)) internal.unshift(TARGET_URL);
+
+            // 2) Visit each page, grab visible text, hash it
+            const next = { pages: {} };
+
+            for (const url of internal) {
+              try {
+                await safeGoto(url);
+
+                const title = await page.title().catch(() => "");
+                const text = await page.evaluate(() => document.body ? document.body.innerText : "");
+                const cleaned = normText(text);
+                const hash = sha256(cleaned);
+
+                next.pages[url] = { title: title || "(no title)", hash };
+              } catch (e) {
+                // If a page fails to load, keep a marker hash so errors can be noticed
+                next.pages[url] = { title: "(load error)", hash: "ERROR" };
+              }
+
+              // tiny pacing
+              await sleep(250);
+            }
+
+            await browser.close();
+
+            // 3) Diff old vs new
+            const prevPages = prev.pages || {};
+            const nextPages = next.pages || {};
+
+            const newUrls = [];
+            const changedUrls = [];
+
+            for (const url of Object.keys(nextPages)) {
+              if (!prevPages[url]) {
+                newUrls.push(url);
+              } else if (prevPages[url].hash !== nextPages[url].hash) {
+                changedUrls.push(url);
+              }
+            }
+
+            const changed = newUrls.length > 0 || changedUrls.length > 0;
+
+            // 4) Write state + message
+            writeFile("data/state.json", JSON.stringify(next, null, 2));
+
+            if (changed) {
+              const lines = [];
+              lines.push("⚡ Canva site updated");
+              lines.push("");
+              lines.push(`Main: ${TARGET_URL}`);
+              lines.push("");
+
+              if (newUrls.length) {
+                lines.push(`New pages (${newUrls.length}):`);
+                for (const u of newUrls.slice(0, 20)) {
+                  const t = nextPages[u]?.title || "(no title)";
+                  lines.push(`- ${t} — ${u}`);
+                }
+                if (newUrls.length > 20) lines.push(`…(+${newUrls.length - 20} more)`);
+                lines.push("");
+              }
+
+              if (changedUrls.length) {
+                lines.push(`Changed pages (${changedUrls.length}):`);
+                for (const u of changedUrls.slice(0, 20)) {
+                  const t = nextPages[u]?.title || "(no title)";
+                  lines.push(`- ${t} — ${u}`);
+                }
+                if (changedUrls.length > 20) lines.push(`…(+${changedUrls.length - 20} more)`);
+                lines.push("");
+              }
+
+              const msg = limitLines(lines.join("\n"), 60);
+              writeFile("data/message.txt", msg);
+              writeFile("data/changed.flag", "true");
+            } else {
+              // clean up if no change
+              if (fs.existsSync("data/message.txt")) fs.unlinkSync("data/message.txt");
+              if (fs.existsSync("data/changed.flag")) fs.unlinkSync("data/changed.flag");
+            }
+
+            console.log(`Checked ${Object.keys(nextPages).length} pages. Changed: ${changed}`);
+          })().catch((e) => {
+            console.error(e);
+            process.exit(1);
+          });
+          EOF
+
+          node monitor.cjs
+
+      - name: Detect change flag
+        id: flag
         run: |
-          if diff -q data/previous.html data/current.html > /dev/null; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-          else
+          if [ -f data/changed.flag ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Send Telegram alert
-        if: ${{ steps.compare.outputs.changed == 'true' }}
+        if: ${{ steps.flag.outputs.changed == 'true' }}
         run: |
-          URL="${{ secrets.TARGET_URL }}"
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -d text="Website updated $URL"
+            --data-urlencode text@"data/message.txt"
 
-      - name: Update baseline
-        run: |
-          cp data/current.html data/previous.html
-
-      - name: Commit changes
+      - name: Commit updated state
+        if: ${{ steps.flag.outputs.changed == 'true' }}
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
-          git add data/
-          git commit -m "Update baseline" || echo "No changes"
+          git add data/state.json
+          git commit -m "Update monitor state" || echo "No changes"
           git push
