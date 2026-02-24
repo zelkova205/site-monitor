@@ -82,16 +82,19 @@ jobs:
             const page = await browser.newPage();
             await page.setUserAgent(UA);
 
+            // ✅ Force desktop viewport so navbar appears in headless
+            await page.setViewport({ width: 1440, height: 900 });
+
             await safeGoto(page, TARGET_URL);
 
-            // Give Canva a moment to fully hydrate the UI
+            // Give Canva time to hydrate UI
             await sleep(1500);
 
             const origin = new URL(TARGET_URL).origin;
             const basePath = new URL(TARGET_URL).pathname.replace(/\/+$/, "");
             const basePrefix = origin + basePath;
 
-            // 1) Collect top-bar text "labels" with click coordinates (center points)
+            // 1) Collect top-bar text labels with click coordinates
             const labels = await page.evaluate(() => {
               function visible(el) {
                 const s = getComputedStyle(el);
@@ -100,7 +103,6 @@ jobs:
                 return r.width > 10 && r.height > 10;
               }
 
-              // grab elements with short text near the top (navbar region)
               const els = Array.from(document.querySelectorAll("span, div, a, button"))
                 .filter(visible)
                 .map(el => {
@@ -108,11 +110,11 @@ jobs:
                   const text = (el.innerText || "").replace(/\s+/g, " ").trim();
                   return { text, r: { top: r.top, left: r.left, width: r.width, height: r.height } };
                 })
-                .filter(x => x.r.top >= 0 && x.r.top < 170)
+                // ✅ widened scan region so navbar gets included
+                .filter(x => x.r.top >= 0 && x.r.top < 260)
                 .filter(x => x.text && x.text.length >= 2 && x.text.length <= 40)
                 .filter(x => !x.text.includes("\n"));
 
-              // de-dupe by text + approximate position (keep right-side items too)
               const seen = new Set();
               const out = [];
               for (const x of els) {
@@ -128,9 +130,8 @@ jobs:
                 });
               }
 
-              // sort left->right
               out.sort((a,b) => a.left - b.left);
-              return out.slice(0, 80);
+              return out.slice(0, 120);
             });
 
             fs.writeFileSync("data/topbar_labels.json", JSON.stringify(labels, null, 2));
@@ -139,16 +140,14 @@ jobs:
             const discovered = new Set([TARGET_URL]);
 
             for (const lab of labels) {
-              // reset to main page each time
               await safeGoto(page, TARGET_URL);
               await sleep(700);
 
               const before = page.url().split("#")[0];
 
-              // click at the center of the label
               await page.mouse.click(lab.x, lab.y, { delay: 30 });
 
-              const after = await waitForUrlChange(page, before, 3500);
+              const after = await waitForUrlChange(page, before, 4500);
 
               if (after.startsWith(basePrefix + "/")) {
                 discovered.add(after);
