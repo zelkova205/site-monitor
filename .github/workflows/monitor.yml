@@ -3,7 +3,7 @@ name: Monitor Canva (Top Bar Click by Coordinates)
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/2 * * * *"
 
 jobs:
   monitor:
