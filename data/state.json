@@ -2,27 +2,31 @@
   "pages": {
     "https://leadholders.my.canva.site/product-and-service-catalog-website/": {
       "title": "Leadholder Collection",
-      "hash": "17af6e0202195b82ce68382303cac0ad2a5eb7f63e1d1666c49ad120320286d7"
+      "hash": "3a14b7327c30ba2c13f89b91fecd26f0b8f2a0b8ea620fcb71395cc6a55e3556"
+    },
+    "https://leadholders.my.canva.site/product-and-service-catalog-website/a-w-faber-tekagraph": {
+      "title": "A W Faber Tekagraph",
+      "hash": "c44f351a4fc30befb6d83728d4b882327249a45d37f0238dd6ebfd2447bae496"
     },
     "https://leadholders.my.canva.site/product-and-service-catalog-website/e-roland": {
       "title": "E Roland",
-      "hash": "73a8804443efb1cb0f2e21257c3c2b7c7c88c9b962f56003d0f27a4b7342ad85"
+      "hash": "12a2eb27d9232a293f77cee8015ae3e854d2ce987cab1d461befa1949e4e67e2"
     },
     "https://leadholders.my.canva.site/product-and-service-catalog-website/fugle-leadlok": {
       "title": "Fugle Leadlok",
-      "hash": "3f8322edc7182703d743c276e94f12e5d25ffab341d30d7569be14ee86f5d4c8"
+      "hash": "c2f9de64538ff166e51fd2e9ddba57e0b30d768ddc8a8a74b62bad8be44dadc0"
     },
     "https://leadholders.my.canva.site/product-and-service-catalog-website/rotring": {
       "title": "Rotring",
-      "hash": "e3bd6ecb26f0ab1ede25de961ee62f09cfe1e14ff25d6a4b32b74609d0226818"
+      "hash": "4d9e7a209f841f86ae9d6d67f7131ff1a24000c2e1bc54c11643694dd06ee492"
     },
     "https://leadholders.my.canva.site/product-and-service-catalog-website/sets---stabilo": {
       "title": "Sets - Stabilo",
-      "hash": "57c6e87d2164fc92cbe5730dafad7798b5a8f3165fed74d62a6390141217c0a0"
+      "hash": "30b7a99ad98251cc57b7fb3cab444e94699f3d9a92520c23dba8ca09fde5ff4d"
     },
     "https://leadholders.my.canva.site/product-and-service-catalog-website/the-combi": {
       "title": "The Combi",
-      "hash": "e7565581807287f271c55e72a23aa3cf4454964fea9693398698c52e1cc30041"
+      "hash": "e888e47340752fc04ce7d78d0eb2e2264849828ffe64380845311633aec25e0b"
     }
   }
 }
