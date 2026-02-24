@@ -10,18 +10,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v3
 
       - name: Install curl
-        run: sudo apt-get update && sudo apt-get install -y curl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl
 
-      - name: Prepare data folder
-        run: mkdir -p data
+      - name: Create data folder
+        run: |
+          mkdir -p data
 
       - name: Download page
-        run: curl -s "${{ secrets.TARGET_URL }}" -o data/current.html
+        run: |
+          curl -s "${{ secrets.TARGET_URL }}" -o data/current.html
 
-      - name: Ensure baseline exists
+      - name: Create baseline if missing
         run: |
           if [ ! -f data/previous.html ]; then
             cp data/current.html data/previous.html
@@ -38,12 +43,17 @@ jobs:
 
       - name: Send Telegram alert
         if: ${{ steps.compare.outputs.changed == 'true' }}
-        run: curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" -d text="⚡ Website Updated: ${{ secrets.TARGET_URL }}"
+        run: |
+          URL="${{ secrets.TARGET_URL }}"
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="Website updated $URL"
 
       - name: Update baseline
-        run: cp data/current.html data/previous.html
+        run: |
+          cp data/current.html data/previous.html
 
-      - name: Commit state
+      - name: Commit changes
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
