@@ -1,5 +1,12 @@
 [
   {
+    "text": "Leadholder Collection",
+    "x": 390,
+    "y": 24,
+    "left": 304,
+    "top": 14
+  },
+  {
     "text": "Unique",
     "x": 392,
     "y": 126,
@@ -21,10 +28,10 @@
     "top": 101
   },
   {
-    "text": "Leadholder Collection",
-    "x": 574,
+    "text": "Sets - Stabilo",
+    "x": 557,
     "y": 24,
-    "left": 488,
+    "left": 508,
     "top": 14
   },
   {
@@ -35,45 +42,45 @@
     "top": 148
   },
   {
-    "text": "Sets - Stabilo",
-    "x": 741,
-    "y": 24,
-    "left": 693,
-    "top": 14
-  },
-  {
     "text": "Rotring",
-    "x": 850,
+    "x": 666,
     "y": 24,
-    "left": 822,
+    "left": 637,
     "top": 14
   },
   {
     "text": "The Combi",
-    "x": 952,
+    "x": 767,
     "y": 24,
-    "left": 911,
+    "left": 726,
     "top": 14
   },
   {
     "text": "Fugle Leadlok",
-    "x": 1077,
+    "x": 893,
     "y": 24,
-    "left": 1024,
+    "left": 840,
     "top": 14
   },
   {
     "text": "E Roland",
-    "x": 1196,
+    "x": 1011,
     "y": 24,
-    "left": 1162,
+    "left": 977,
     "top": 14
   },
   {
     "text": "A W Faber Tekagraph",
-    "x": 1343,
+    "x": 1158,
     "y": 24,
-    "left": 1262,
+    "left": 1077,
+    "top": 14
+  },
+  {
+    "text": "K & E Keuffel & Esser",
+    "x": 1348,
+    "y": 24,
+    "left": 1271,
     "top": 14
   }
 ]
