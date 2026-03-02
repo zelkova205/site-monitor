@@ -1,13 +1,18 @@
-name: Monitor Canva (Top Bar Click by Coordinates)
+name: Monitor Canva (2-min loop)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/2 * * * *"
+    - cron: "0 * * * *"   # start once per hour (reliable trigger)
+
+concurrency:
+  group: canva-monitor
+  cancel-in-progress: true
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
+    timeout-minutes: 360   # GitHub job hard limit is 6 hours; we’ll use ~55 mins anyway.
 
     steps:
       - name: Checkout
@@ -23,7 +28,7 @@ jobs:
           npm init -y
           npm install puppeteer
 
-      - name: Run Monitor
+      - name: Create monitor script
         env:
           TARGET_URL: ${{ secrets.TARGET_URL }}
         run: |
@@ -62,7 +67,7 @@ jobs:
             }
           }
 
-          async function waitForUrlChange(page, before, timeoutMs = 4000) {
+          async function waitForUrlChange(page, before, timeoutMs = 4500) {
             const start = Date.now();
             while (Date.now() - start < timeoutMs) {
               const now = page.url().split("#")[0];
@@ -75,6 +80,9 @@ jobs:
           (async () => {
             const prev = loadState();
 
+            // small jitter to avoid being perfectly clockwork
+            await sleep(Math.floor(Math.random() * 30000));
+
             const browser = await puppeteer.launch({
               args: ["--no-sandbox", "--disable-setuid-sandbox"],
             });
@@ -82,19 +90,17 @@ jobs:
             const page = await browser.newPage();
             await page.setUserAgent(UA);
 
-            // ✅ Force desktop viewport so navbar appears in headless
+            // Force desktop layout so navbar exists in headless
             await page.setViewport({ width: 1440, height: 900 });
 
             await safeGoto(page, TARGET_URL);
-
-            // Give Canva time to hydrate UI
             await sleep(1500);
 
             const origin = new URL(TARGET_URL).origin;
             const basePath = new URL(TARGET_URL).pathname.replace(/\/+$/, "");
             const basePrefix = origin + basePath;
 
-            // 1) Collect top-bar text labels with click coordinates
+            // Collect visible label texts near the top (includes navbar)
             const labels = await page.evaluate(() => {
               function visible(el) {
                 const s = getComputedStyle(el);
@@ -110,7 +116,6 @@ jobs:
                   const text = (el.innerText || "").replace(/\s+/g, " ").trim();
                   return { text, r: { top: r.top, left: r.left, width: r.width, height: r.height } };
                 })
-                // ✅ widened scan region so navbar gets included
                 .filter(x => x.r.top >= 0 && x.r.top < 260)
                 .filter(x => x.text && x.text.length >= 2 && x.text.length <= 40)
                 .filter(x => !x.text.includes("\n"));
@@ -129,14 +134,13 @@ jobs:
                   top: Math.round(x.r.top)
                 });
               }
-
               out.sort((a,b) => a.left - b.left);
               return out.slice(0, 120);
             });
 
             fs.writeFileSync("data/topbar_labels.json", JSON.stringify(labels, null, 2));
 
-            // 2) Click each label by coordinates and record URL changes
+            // Click each label & capture subpage URLs
             const discovered = new Set([TARGET_URL]);
 
             for (const lab of labels) {
@@ -144,7 +148,6 @@ jobs:
               await sleep(700);
 
               const before = page.url().split("#")[0];
-
               await page.mouse.click(lab.x, lab.y, { delay: 30 });
 
               const after = await waitForUrlChange(page, before, 4500);
@@ -156,9 +159,8 @@ jobs:
 
             fs.writeFileSync("data/discovered_urls.txt", Array.from(discovered).sort().join("\n"));
 
-            // 3) Hash each discovered page’s visible text
+            // Hash visible text of each discovered page
             const next = { pages: {} };
-
             for (const url of Array.from(discovered).sort()) {
               await safeGoto(page, url);
               const title = await page.title().catch(() => "(no title)");
@@ -169,7 +171,7 @@ jobs:
 
             await browser.close();
 
-            // 4) Diff
+            // Diff
             const newUrls = [];
             const changedUrls = [];
 
@@ -179,9 +181,9 @@ jobs:
             }
 
             const changed = newUrls.length > 0 || changedUrls.length > 0;
-
             saveState(next);
 
+            // Set flags/files for the workflow loop to use
             if (changed) {
               const lines = [];
               lines.push("⚡ Canva site updated");
@@ -213,28 +215,42 @@ jobs:
           });
           EOF
 
-          node monitor.cjs
-
-      - name: Detect change
-        id: flag
-        run: |
-          if [ -f data/changed.flag ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "changed=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Send Telegram alert
-        if: ${{ steps.flag.outputs.changed == 'true' }}
-        run: |
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-            --data-urlencode text@"data/message.txt"
-
-      - name: Commit state + debug
+      - name: Loop every 2 minutes for ~55 minutes
+        env:
+          TARGET_URL: ${{ secrets.TARGET_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
-          git add data/state.json data/discovered_urls.txt data/topbar_labels.json
-          git commit -m "Update monitor state" || echo "No changes"
-          git push
+
+          # ~55 minutes: 28 checks x 120s sleep ≈ 56 minutes
+          for i in $(seq 1 28); do
+            echo "=== Check $i/28 ==="
+            node monitor.cjs || true
+
+            if [ -f data/changed.flag ]; then
+              echo "Change detected — sending Telegram + committing state"
+
+              # Send Telegram (retry a few times)
+              for r in 1 2 3; do
+                curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                  -d chat_id="${TELEGRAM_CHAT_ID}" \
+                  --data-urlencode text@"data/message.txt" && break
+                sleep 2
+              done
+
+              git add data/state.json data/discovered_urls.txt data/topbar_labels.json
+              git commit -m "Update monitor state" || echo "No git changes"
+              git push || true
+
+              rm -f data/changed.flag
+            else
+              echo "No change."
+            fi
+
+            # Sleep 2 minutes between checks (skip sleep after last iteration)
+            if [ "$i" -lt 28 ]; then
+              sleep 120
+            fi
+          done
