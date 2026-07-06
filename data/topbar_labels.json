@@ -1,72 +1,58 @@
 [
   {
-    "text": "All Items will eventually be FOR SALE",
-    "x": 378,
-    "y": 266,
-    "left": 87,
-    "top": 250
-  },
-  {
     "text": "Unique",
-    "x": 193,
+    "x": 164,
     "y": 107,
-    "left": 126,
-    "top": 85
-  },
-  {
-    "text": "All Items will eventually be FOR SALE",
-    "x": 378,
-    "y": 266,
-    "left": 139,
-    "top": 251
+    "left": 82,
+    "top": 81
   },
   {
     "text": "‘A Visual Museum’",
-    "x": 378,
-    "y": 201,
-    "left": 202,
-    "top": 179
+    "x": 386,
+    "y": 221,
+    "left": 174,
+    "top": 195
   },
   {
     "text": "Private Leadholder",
-    "x": 446,
+    "x": 468,
     "y": 107,
-    "left": 261,
-    "top": 85
+    "left": 245,
+    "top": 81
   },
   {
     "text": "Collection",
-    "x": 378,
-    "y": 154,
-    "left": 282,
-    "top": 132
+    "x": 386,
+    "y": 164,
+    "left": 270,
+    "top": 138
   },
   {
     "text": "Home of the World’s Rarest Leadholder",
-    "x": 1061,
-    "y": 147,
-    "left": 770,
-    "top": 90
+    "x": 1053,
+    "y": 136,
+    "left": 729,
+    "top": 79
   },
   {
     "text": "Home of the World’s",
-    "x": 1061,
-    "y": 118,
-    "left": 816,
-    "top": 88
+    "x": 1053,
+    "y": 107,
+    "left": 808,
+    "top": 77
   },
   {
     "text": "Rarest Leadholder",
-    "x": 1061,
-    "y": 175,
-    "left": 839,
-    "top": 145
+    "x": 1053,
+    "y": 164,
+    "left": 831,
+    "top": 134
   },
   {
     "text": "Yes, Keep Watching -",
-    "x": 1046,
-    "y": 245,
-    "left": 893,
-    "top": 226
+    "x": 1052,
+    "y": 242,
+    "left": 878,
+    "top": 221
   }
 ]
